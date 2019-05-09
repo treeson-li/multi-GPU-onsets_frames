@@ -38,7 +38,7 @@ tf.app.flags.DEFINE_string(
     'examples_path', '/media/admin1/Windows/MAPS_TFRECORD/maps_config2_train.tfrecord',
     'Path to a TFRecord file of train/eval examples.')
 tf.app.flags.DEFINE_string(
-    'run_dir', '/data/MAPS_ori/',
+    'run_dir', '~/data/MAPS_ori/',
     'Path where checkpoints and summary events will be located during '
     'training and evaluation. Separate subdirectories `train` and `eval` '
     'will be created within this directory.')
