@@ -28,17 +28,17 @@ import tensorflow as tf
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_string("ps_hosts", "localhost:2222", "ps hosts")
-tf.app.flags.DEFINE_string("worker_hosts", "localhost:2223,localhost:2224", "worker hosts")
+tf.app.flags.DEFINE_string("worker_hosts", "localhost:2223,localhost:2224,localhost:2225,localhost:2226", "worker hosts")
 tf.app.flags.DEFINE_string("job_name", "worker", "'ps' or'worker'")
 tf.app.flags.DEFINE_integer("task_index", 0, "Index of task within the job")
 
 tf.app.flags.DEFINE_string('master', '',
                            'Name of the TensorFlow runtime to use.')
 tf.app.flags.DEFINE_string(
-    'examples_path', '/media/admin1/Windows/MAPS_TFRECORD/maps_config2_train.tfrecord',
+    'examples_path', '/home/admin1/data/tfrecord/maps/maps_config2_train_spec.tfrecord',
     'Path to a TFRecord file of train/eval examples.')
 tf.app.flags.DEFINE_string(
-    'run_dir', '~/data/MAPS_ori/',
+    'run_dir', '~/data/score_cxt128merged/',#'~/data/score_cxt128/',
     'Path where checkpoints and summary events will be located during '
     'training and evaluation. Separate subdirectories `train` and `eval` '
     'will be created within this directory.')
@@ -57,7 +57,7 @@ tf.app.flags.DEFINE_integer(
     'Number of batches to use during evaluation or `None` for all batches '
     'in the data source.')
 tf.app.flags.DEFINE_integer(
-    'checkpoints_to_keep', 2000,
+    'checkpoints_to_keep', 5,
     'Maximum number of checkpoints to keep in `train` mode or 0 for infinite.')
 tf.app.flags.DEFINE_enum('mode', 'train', ['train', 'eval', 'test'],
                          'Which mode to use.')
@@ -75,13 +75,16 @@ tf.app.flags.DEFINE_string(
 
 def run(hparams, run_dir):
   """Run train/eval/test."""
+  print('--------------'*5)
   train_dir = os.path.join(run_dir, 'train')
   ps_hosts = FLAGS.ps_hosts.split(",")
   worker_hosts = FLAGS.worker_hosts.split(",")  
   # create the cluster configured by `ps_hosts' and 'worker_hosts'
   cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
+  print('cluster', cluster)
   server=tf.train.Server(cluster,job_name=FLAGS.job_name,
                              task_index=FLAGS.task_index)
+  print(FLAGS.job_name, FLAGS.task_index)
   if FLAGS.job_name == "ps":
     server.join()  # ps hosts only join
   elif FLAGS.job_name == "worker":

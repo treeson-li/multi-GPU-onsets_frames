@@ -41,22 +41,26 @@ from magenta.common import tf_utils
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
+import xlwt
+xls = xlwt.Workbook()
+sheet1 = xls.add_sheet('Sheet1')
 
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_string('master', '',
                            'Name of the TensorFlow runtime to use.')
 tf.app.flags.DEFINE_string(
-    'acoustic_run_dir', '/home/admin1/sz/onset_frame/magenta/magenta/models/onsets_frames_transcription/train2',
+    'acoustic_run_dir', '~/data/score_cxt128/train/',
     'Path to look for acoustic checkpoints. Should contain subdir `train`.')
 tf.app.flags.DEFINE_string(
     'acoustic_checkpoint_filename', None,
     'Filename of the checkpoint to use. If not specified, will use the latest '
     'checkpoint')
-tf.app.flags.DEFINE_string('examples_path', '/home/admin1/sz/onset_frame/magenta/magenta/models/onsets_frames_transcription/data/maestro_test.tfrecord',
+tf.app.flags.DEFINE_string('examples_path', '/home/admin1/data/tfrecord/maps/maps_config2_test_spec.tfrecord',
+                            #'/media/admin1/Windows/MAPS_TFRECORD/maps_config2_test.tfrecord',#
                            'Path to test examples TFRecord.')
 tf.app.flags.DEFINE_string(
-    'run_dir', '/home/admin1/sz/onset_frame/magenta/magenta/models/onsets_frames_transcription/train2/infer',
+    'run_dir', '~/data/score_cxt128/infer',
     'Path to store output midi files and summary events.')
 tf.app.flags.DEFINE_string(
     'hparams', '',
@@ -71,7 +75,7 @@ tf.app.flags.DEFINE_float(
     'offset_threshold', 0.5,
     'Threshold to use when sampling from the acoustic model.')
 tf.app.flags.DEFINE_integer(
-    'max_seconds_per_sequence', None,
+    'max_seconds_per_sequence', 300,
     'If set, will truncate sequences to be at most this many seconds long.')
 tf.app.flags.DEFINE_boolean(
     'require_onset', True,
@@ -147,6 +151,7 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
     def init_fn(unused_self, sess):
       acoustic_restore.restore(sess, acoustic_checkpoint)
 
+    whileIndex = 0
     scaffold = tf.train.Scaffold(init_fn=init_fn)
     session_creator = tf.train.ChiefSessionCreator(
         scaffold=scaffold, master=FLAGS.master)
@@ -158,7 +163,7 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
       tf.logging.info('Inferring for %d batches',
                       acoustic_data_provider.num_batches)
       infer_times = []
-      num_frames = []
+      num_frames = []      
       for unused_i in range(acoustic_data_provider.num_batches):
         print('\n\n=====================================================================================================================')
         print('=====================================================================================================================')
@@ -243,7 +248,10 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
             sequence_label=sequences_lib.adjust_notesequence_times(
                 music_pb2.NoteSequence.FromString(note_sequences[0]),
                 shift_notesequence)[0],
-            sequence_id=filenames[0])
+            sequence_id=filenames[0],
+            index=whileIndex,
+            sheet=sheet1)
+        whileIndex += 1
 
         # Make filenames UNIX-friendly.
         filename = filenames[0].replace('/', '_').replace(':', '.')
@@ -273,6 +281,7 @@ def model_inference(acoustic_checkpoint, hparams, examples_path, run_dir):
         #               hparams)))
 
         summary_writer.flush()
+      xls.save('results.xls')
 
 
 def main(unused_argv):
@@ -299,6 +308,7 @@ def main(unused_argv):
   tf.gfile.MakeDirs(run_dir)
 
   with tf.gfile.Open(os.path.join(run_dir, 'run_config.txt'), 'w') as f:
+    print('acoustic_checkpoint', acoustic_checkpoint)
     f.write(acoustic_checkpoint + '\n')
     f.write(FLAGS.examples_path + '\n')
     f.write(str(hparams) + '\n')

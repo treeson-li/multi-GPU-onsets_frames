@@ -211,7 +211,7 @@ def score_sequence(session, global_step_increment, summary_op, summary_writer,
                    metric_note_recall_with_offsets_velocity,
                    metric_note_f1_with_offsets_velocity, metric_frame_labels,
                    metric_frame_predictions, frame_labels, sequence_prediction,
-                   frames_per_second, sequence_label, sequence_id):
+                   frames_per_second, sequence_label, sequence_id, index, sheet):
   """Calculate metrics on the inferred sequence."""
   est_intervals, est_pitches, est_velocities = sequence_to_valued_intervals(
       sequence_prediction)
@@ -262,7 +262,7 @@ def score_sequence(session, global_step_increment, summary_op, summary_writer,
     # Truncate transcribed frames.
     frame_predictions = frame_predictions[:frame_labels.shape[0], :]
 
-  global_step, _ = session.run(
+  global_step, _metrics = session.run(
       [global_step_increment, metrics_to_updates], {
           metric_frame_predictions:
               frame_predictions,
@@ -296,6 +296,19 @@ def score_sequence(session, global_step_increment, summary_op, summary_writer,
       sequence_id, global_step, sequence_note_f1)
   summary_writer.add_summary(summary, global_step)
   summary_writer.flush()
+
+#  print('Updating scores for ', sequence_id, 'Step= ', global_step, 'Note F1=', sequence_note_f1)
+  if index == 0:
+    i = 0
+    for key, val in _metrics.items():
+      sheet.write(0, i, key.split('/')[1])
+      sheet.write(1, i, str(val))
+      i += 1
+  else:
+    i = 0
+    for key, val in _metrics.items():
+      sheet.write(index+1, i, str(val))
+      i += 1
 
   return sequence_label
 

@@ -317,7 +317,7 @@ def truncate_note_sequence_op(sequence_tensor, truncated_length_frames,
 InputTensors = collections.namedtuple(
     'InputTensors',
     ('spec', 'labels', 'label_weights', 'length', 'onsets', 'offsets',
-     'velocities', 'velocity_range', 'filename', 'note_sequence'))
+     'velocities', 'filename', 'note_sequence'))
 
 
 def _preprocess_data(sequence, audio, velocity_range, hparams, is_training):
@@ -412,7 +412,7 @@ def _provide_data(input_tensors, truncated_length, hparams,
                   include_note_sequences):
   """Returns tensors for reading batches from provider."""
   (spec, labels, label_weights, length, onsets, offsets, velocities,
-   unused_velocity_range, filename, note_sequence) = input_tensors
+   filename, note_sequence) = input_tensors
 
   length = tf.to_int32(length)
   labels = tf.reshape(labels, (-1, constants.MIDI_PITCHES))
@@ -526,13 +526,31 @@ def provide_batch(batch_size,
           examples, is_training)
 
     def _parse(example_proto):
+      """Process an Example proto into a model input."""
       features = {
-          'id': tf.FixedLenFeature(shape=(), dtype=tf.string),
-          'sequence': tf.FixedLenFeature(shape=(), dtype=tf.string),
-          'audio': tf.FixedLenFeature(shape=(), dtype=tf.string),
-          'velocity_range': tf.FixedLenFeature(shape=(), dtype=tf.string),
+          'spec': tf.VarLenFeature(dtype=tf.float32),
+          'spectrogram_hash': tf.FixedLenFeature(shape=(), dtype=tf.int64),
+          'labels': tf.VarLenFeature(dtype=tf.float32),
+          'label_weights': tf.VarLenFeature(dtype=tf.float32),
+          'length': tf.FixedLenFeature(shape=(), dtype=tf.int64),
+          'onsets': tf.VarLenFeature(dtype=tf.float32),
+          'offsets': tf.VarLenFeature(dtype=tf.float32),
+          'velocities': tf.VarLenFeature(dtype=tf.float32),
+          'sequence_id': tf.FixedLenFeature(shape=(), dtype=tf.string),
+          'note_sequence': tf.FixedLenFeature(shape=(), dtype=tf.string),
       }
-      return tf.parse_single_example(example_proto, features)
+      record = tf.parse_single_example(example_proto, features)
+      input_tensors = InputTensors(
+          spec=tf.sparse.to_dense(record['spec']),
+          labels=tf.sparse.to_dense(record['labels']),
+          label_weights=tf.sparse.to_dense(record['label_weights']),
+          length=record['length'],
+          onsets=tf.sparse.to_dense(record['onsets']),
+          offsets=tf.sparse.to_dense(record['offsets']),
+          velocities=tf.sparse.to_dense(record['velocities']),
+          filename=record['sequence_id'],
+          note_sequence=record['note_sequence'])
+      return input_tensors
 
     def _preprocess(record):
       (spec, labels, label_weights, length, onsets,
@@ -551,8 +569,8 @@ def provide_batch(batch_size,
           filename=record['id'],
           note_sequence=record['sequence'])
 
-    input_dataset = input_dataset.map(_parse).map(
-        _preprocess, num_parallel_calls=NUM_BATCH_THREADS)
+    #input_dataset = input_dataset.map(_parse).map(_preprocess, num_parallel_calls=NUM_BATCH_THREADS)
+    input_dataset = input_dataset.map(_preprocess if hparams.preprocess_examples else _parse)
     # print('=======================================================================================input_dataset')
     # print('|', input_dataset)
 
