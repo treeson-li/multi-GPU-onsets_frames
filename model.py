@@ -25,8 +25,9 @@ from magenta.common import flatten_maybe_padded_sequences
 from magenta.common import tf_utils
 
 import tensorflow as tf
-
 import tensorflow.contrib.slim as slim
+
+import thumt.layers.attention as transformer_att
 
 def get_state_variables(stack_multiplier, stack_size, batch_size, num_units):
     c = tf.zeros([stack_multiplier * stack_size, batch_size, num_units],
@@ -273,6 +274,17 @@ def acoustic_model(inputs, hparams, lstm_units, lengths, is_training=True, is_re
   else:
     return conv_output
 
+def encoder_prepare(inputs, lstm_units, lengths, is_training, params):
+  ''' prepare encoder for attention '''
+  enc_output = lstm_layer(inputs, params.batch_size, lstm_units, 
+                      lengths=lengths if params.use_lengths else None,
+                      use_cudnn=params.use_cudnn, 
+                      rnn_dropout_drop_amt=params.rnn_dropout_drop_amt, 
+                      stack_size=params.encoder_rnn_stack_size,
+                      is_training=is_training,
+                      bidirectional=True)
+    
+  return enc_output
 
 def get_model(transcription_data, hparams, is_training=True, is_real_time=False):
   """Builds the acoustic model."""
@@ -303,17 +315,27 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
         'If stop_activation_gradient is true, activation_loss must be true.')
 
   losses = {}
+  merged_labels = tf.concat([onset_labels, frame_label_weights, offset_labels], axis=2)
   with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
 ###########################################################################################################################################
 ###########################################################################################################################################
     with tf.variable_scope('onsets'):
-      onset_outputs = acoustic_model(
-          spec,
-          hparams,
-          lstm_units=hparams.onset_lstm_units,
-          lengths=lengths,
-          is_training=is_training,
-          is_real_time=is_real_time)
+      onset_label_enc = encoder_prepare(merged_labels,
+                                  hparams.onset_lstm_units,
+                                  lengths=lengths,
+                                  is_training=is_training,
+                                  params=hparams)
+      
+      spec_enc_4onset = acoustic_model(spec, hparams, hparams.spec_lstm_units, lengths, is_training)
+      onset_outputs = transformer_att.sparse_multihead_attention(
+                                  queries=spec_enc_4onset,
+                                  memories=onset_label_enc,
+                                  num_heads=hparams.num_heads,
+                                  key_size=hparams.onset_lstm_units,
+                                  value_size=hparams.onset_lstm_units,
+                                  output_size=hparams.onset_lstm_units,
+                                  keep_prob=1-hparams.att_dropout,
+                                  scope='onset_attention')
       onset_probs = slim.fully_connected(
           onset_outputs,
           constants.MIDI_PITCHES,
@@ -336,19 +358,26 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
 ###########################################################################################################################################
 ###########################################################################################################################################
     with tf.variable_scope('offsets'):
-      offset_outputs = acoustic_model(
-          spec,
-          hparams,
-          lstm_units=hparams.offset_lstm_units,
-          lengths=lengths,
-          is_training=is_training,
-          is_real_time=is_real_time)
+      offset_lable_enc = encoder_prepare(merged_labels,
+                                  hparams.offset_lstm_units,
+                                  lengths=lengths,
+                                  is_training=is_training,
+                                  params=hparams)
+      spec_enc_4offsets = acoustic_model(spec, hparams, lstm_units=hparams.offset_lstm_units, lengths=lengths, is_training=is_training)
+      offset_outputs = transformer_att.sparse_multihead_attention(
+                                  queries=spec_enc_4offsets,
+                                  memories=offset_lable_enc,
+                                  num_heads=hparams.num_heads,
+                                  key_size=hparams.offset_lstm_units,
+                                  value_size=hparams.offset_lstm_units,
+                                  output_size=hparams.offset_lstm_units,
+                                  keep_prob=1-hparams.att_dropout,
+                                  scope='offset_attention')
       offset_probs = slim.fully_connected(
           offset_outputs,
           constants.MIDI_PITCHES,
           activation_fn=tf.sigmoid,
           scope='offset_probs')
-
       # offset_probs_flat is used during inference.
       offset_probs_flat = flatten_maybe_padded_sequences(offset_probs, lengths)
       offset_labels_flat = flatten_maybe_padded_sequences(
@@ -377,7 +406,7 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
           constants.MIDI_PITCHES,
           activation_fn=None,
           scope='onset_velocities')
-
+      
       velocity_values_flat = flatten_maybe_padded_sequences(
           velocity_values, lengths)
       tf.identity(velocity_values_flat, name='velocity_values_flat')
@@ -432,45 +461,35 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
       combined_probs = tf.concat(probs, 2)
 
       if hparams.combined_lstm_units > 0:
-        # rnn_cell_fw = tf.contrib.rnn.LSTMBlockCell(hparams.combined_lstm_units)
-        # if is_real_time:
-        #     states = get_state_variables(hparams.batch_size, rnn_cell_fw)   # add
-        # else: states = None
-        # if hparams.frame_bidirectional:
-        #   rnn_cell_bw = tf.contrib.rnn.LSTMBlockCell(
-        #       hparams.combined_lstm_units)
-        #   outputs, unused_output_states = tf.nn.bidirectional_dynamic_rnn(
-        #       rnn_cell_fw, rnn_cell_bw, inputs=combined_probs, dtype=tf.float32)
-        #   combined_outputs = tf.concat(outputs, 2)
-        # else:
-        #   combined_outputs, unused_output_states = tf.nn.dynamic_rnn(
-        #       rnn_cell_fw,
-        #       inputs=combined_probs, 
-        #       sequence_length=lengths,  # add or error hanppened 
-        #       dtype=tf.float32,
-        #       initial_state=states) # add
-        # if is_real_time:
-        #     update_op = get_state_update_op(states, unused_output_states) # add
-        #     tf.add_to_collection('update_op', update_op)    # add
-
-        outputs = lstm_layer(
-            combined_probs,
-            hparams.batch_size,
-            hparams.combined_lstm_units,
-            lengths=lengths if hparams.use_lengths else None,
-            stack_size=hparams.combined_rnn_stack_size,
-            use_cudnn=hparams.use_cudnn,
-            is_training=is_training,
-            bidirectional=hparams.bidirectional)
+        frame_label_enc = encoder_prepare(merged_labels,
+                                  hparams.combined_lstm_units,                                                
+                                  lengths,
+                                  is_training=is_training,
+                                  params=hparams)
+        frame_query_enc = encoder_prepare(
+                                  combined_probs,
+                                  hparams.combined_lstm_units,
+                                  lengths=lengths,
+                                  is_training=is_training,
+                                  params=hparams)
+        frame_outputs = transformer_att.sparse_multihead_attention(
+                                  queries=frame_query_enc,
+                                  memories=frame_label_enc,
+                                  num_heads=hparams.num_heads,
+                                  key_size=hparams.combined_lstm_units,
+                                  value_size=hparams.combined_lstm_units,
+                                  output_size=hparams.combined_lstm_units,
+                                  keep_prob=1-hparams.att_dropout,
+                                  scope='frame_attention')  
       else:
-        outputs = combined_probs
+        frame_outputs = combined_probs
 
       frame_probs = slim.fully_connected(
-          outputs,
+          frame_outputs,
           constants.MIDI_PITCHES,
           activation_fn=tf.sigmoid,
           scope='frame_probs')
-
+      
     frame_labels_flat = flatten_maybe_padded_sequences(frame_labels, lengths)
     frame_probs_flat = flatten_maybe_padded_sequences(frame_probs, lengths)
     tf.identity(frame_probs_flat, name='frame_probs_flat')
@@ -545,7 +564,8 @@ def get_default_hparams():
       transform_audio=True,
       learning_rate=0.0006,
       clip_norm=3,
-      truncated_length=1500,  # 48 seconds
+      truncated_length=0,#1500,  # 48 seconds
+      spec_lstm_units=256,
       onset_lstm_units=256,
       offset_lstm_units=256,
       velocity_lstm_units=0,
@@ -554,6 +574,7 @@ def get_default_hparams():
       onset_mode='length_ms',
       acoustic_rnn_stack_size=1,
       combined_rnn_stack_size=1,
+      encoder_rnn_stack_size=1,
       # using this will result in output not aligning with audio.
       backward_shift_amount_ms=0,
       activation_loss=False,
@@ -579,4 +600,6 @@ def get_default_hparams():
       bidirectional=True,
       onset_overlap=True,
       preprocess_examples=False,
+      num_heads=4,
+      att_dropout=0.1,
   )
