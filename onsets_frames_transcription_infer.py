@@ -50,17 +50,17 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string('master', '',
                            'Name of the TensorFlow runtime to use.')
 tf.app.flags.DEFINE_string(
-    'acoustic_run_dir', '~/data/score_cxt128/train/',
+    'acoustic_run_dir', '~/data/score_template4/train/',
     'Path to look for acoustic checkpoints. Should contain subdir `train`.')
 tf.app.flags.DEFINE_string(
     'acoustic_checkpoint_filename', None,
     'Filename of the checkpoint to use. If not specified, will use the latest '
     'checkpoint')
-tf.app.flags.DEFINE_string('examples_path', '/home/admin1/data/tfrecord/maps/maps_config2_test_spec.tfrecord',
+tf.app.flags.DEFINE_string('examples_path', '/home/liming/data/tfrecord/maps/maps_config2_test_spec.tfrecord',
                             #'/media/admin1/Windows/MAPS_TFRECORD/maps_config2_test.tfrecord',#
                            'Path to test examples TFRecord.')
 tf.app.flags.DEFINE_string(
-    'run_dir', '~/data/score_cxt128/infer',
+    'run_dir', '~/data/score_template4/infer',
     'Path to store output midi files and summary events.')
 tf.app.flags.DEFINE_string(
     'hparams', '',
@@ -75,7 +75,7 @@ tf.app.flags.DEFINE_float(
     'offset_threshold', 0.5,
     'Threshold to use when sampling from the acoustic model.')
 tf.app.flags.DEFINE_integer(
-    'max_seconds_per_sequence', 300,
+    'max_seconds_per_sequence', 250,
     'If set, will truncate sequences to be at most this many seconds long.')
 tf.app.flags.DEFINE_boolean(
     'require_onset', True,

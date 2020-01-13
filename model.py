@@ -28,6 +28,7 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 
 import thumt.layers.attention as transformer_att
+import thumt.models.transformer as transformer
 
 def get_state_variables(stack_multiplier, stack_size, batch_size, num_units):
     c = tf.zeros([stack_multiplier * stack_size, batch_size, num_units],
@@ -250,39 +251,49 @@ def lstm_layer(inputs,
 
     return outputs
 
+def self_attention_layer(inputs, num_units, params, is_training, bidirectional):
+  """Create self sparse Attention Network layer."""
+  return transformer.sparse_self_attention(inputs, num_units, params, is_training, bidirectional)
 
 def acoustic_model(inputs, hparams, lstm_units, lengths, is_training=True, is_real_time=False):
   """Acoustic model that handles all specs for a sequence in one window."""
-  conv_output = conv_net(inputs, hparams)
-  if is_real_time:
-    conv_output = conv_output[:, const.PADDING_ERROR:tf.shape(conv_output)[1]-const.PADDING_ERROR, :]
-    tf.add_to_collection('conv_output', conv_output)
-  print('>>>>>>>>----------------------- conv_output', conv_output)
+  with tf.variable_scope("acoustic_model"):
+    conv_output = conv_net(inputs, hparams)
+    if is_real_time:
+      conv_output = conv_output[:, const.PADDING_ERROR:tf.shape(conv_output)[1]-const.PADDING_ERROR, :]
+      tf.add_to_collection('conv_output', conv_output)
+    print('>>>>>>>>----------------------- conv_output', conv_output)
 
-  if lstm_units:
-    return lstm_layer(
-        conv_output,
-        hparams.batch_size,
-        lstm_units,
-        lengths=lengths if hparams.use_lengths else None,
-        stack_size=hparams.acoustic_rnn_stack_size,
-        use_cudnn=hparams.use_cudnn,
-        is_training=is_training,
-        bidirectional=hparams.bidirectional,
-        is_real_time=is_real_time)
+    if hparams.use_transformer:
+      return self_attention_layer(conv_output, lstm_units, hparams, is_training, hparams.bidirectional)
 
-  else:
-    return conv_output
+    if lstm_units:
+      return lstm_layer(
+          conv_output,
+          hparams.batch_size,
+          lstm_units,
+          lengths=lengths if hparams.use_lengths else None,
+          stack_size=hparams.acoustic_rnn_stack_size,
+          use_cudnn=hparams.use_cudnn,
+          is_training=is_training,
+          bidirectional=hparams.bidirectional,
+          is_real_time=is_real_time)
 
-def encoder_prepare(inputs, lstm_units, lengths, is_training, params):
+    else:
+      return conv_output
+
+def encoder_prepare(inputs, lstm_units, lengths, is_training, params, bidirectional=True, use_transformer=False):
   ''' prepare encoder for attention '''
-  enc_output = lstm_layer(inputs, params.batch_size, lstm_units, 
+  if use_transformer:
+    enc_output = self_attention_layer(inputs, lstm_units, params, is_training, bidirectional)
+  else:
+    enc_output = lstm_layer(inputs, params.batch_size, lstm_units, 
                       lengths=lengths if params.use_lengths else None,
                       use_cudnn=params.use_cudnn, 
                       rnn_dropout_drop_amt=params.rnn_dropout_drop_amt, 
                       stack_size=params.encoder_rnn_stack_size,
                       is_training=is_training,
-                      bidirectional=True)
+                      bidirectional=bidirectional)
     
   return enc_output
 
@@ -315,16 +326,20 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
         'If stop_activation_gradient is true, activation_loss must be true.')
 
   losses = {}
-  merged_labels = tf.concat([onset_labels, frame_label_weights, offset_labels], axis=2)
+  if not is_training:
+    hparams.att_dropout = 0
+  #merged_labels = tf.concat([onset_labels, frame_label_weights, offset_labels], axis=2)
   with slim.arg_scope([slim.batch_norm, slim.dropout], is_training=is_training):
 ###########################################################################################################################################
 ###########################################################################################################################################
     with tf.variable_scope('onsets'):
-      onset_label_enc = encoder_prepare(merged_labels,
+      onset_label_enc = encoder_prepare(onset_labels,
                                   hparams.onset_lstm_units,
                                   lengths=lengths,
                                   is_training=is_training,
-                                  params=hparams)
+                                  params=hparams,
+                                  bidirectional=True,
+                                  use_transformer=False)
       
       spec_enc_4onset = acoustic_model(spec, hparams, hparams.spec_lstm_units, lengths, is_training)
       onset_outputs = transformer_att.sparse_multihead_attention(
@@ -335,7 +350,9 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
                                   value_size=hparams.onset_lstm_units,
                                   output_size=hparams.onset_lstm_units,
                                   keep_prob=1-hparams.att_dropout,
-                                  scope='onset_attention')
+                                  scope='onset_attention',
+                                  context=hparams.context,
+                                  attn_mode='diag_band')
       onset_probs = slim.fully_connected(
           onset_outputs,
           constants.MIDI_PITCHES,
@@ -358,11 +375,13 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
 ###########################################################################################################################################
 ###########################################################################################################################################
     with tf.variable_scope('offsets'):
-      offset_lable_enc = encoder_prepare(merged_labels,
+      offset_lable_enc = encoder_prepare(offset_labels,
                                   hparams.offset_lstm_units,
                                   lengths=lengths,
                                   is_training=is_training,
-                                  params=hparams)
+                                  params=hparams,
+                                  bidirectional=True,
+                                  use_transformer=False)
       spec_enc_4offsets = acoustic_model(spec, hparams, lstm_units=hparams.offset_lstm_units, lengths=lengths, is_training=is_training)
       offset_outputs = transformer_att.sparse_multihead_attention(
                                   queries=spec_enc_4offsets,
@@ -372,7 +391,9 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
                                   value_size=hparams.offset_lstm_units,
                                   output_size=hparams.offset_lstm_units,
                                   keep_prob=1-hparams.att_dropout,
-                                  scope='offset_attention')
+                                  scope='offset_attention',
+                                  context=hparams.context,
+                                  attn_mode='diag_band')
       offset_probs = slim.fully_connected(
           offset_outputs,
           constants.MIDI_PITCHES,
@@ -461,17 +482,21 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
       combined_probs = tf.concat(probs, 2)
 
       if hparams.combined_lstm_units > 0:
-        frame_label_enc = encoder_prepare(merged_labels,
+        frame_label_enc = encoder_prepare(frame_label_weights,
                                   hparams.combined_lstm_units,                                                
                                   lengths,
                                   is_training=is_training,
-                                  params=hparams)
+                                  params=hparams,
+                                  bidirectional=True,
+                                  use_transformer=False)
         frame_query_enc = encoder_prepare(
                                   combined_probs,
                                   hparams.combined_lstm_units,
                                   lengths=lengths,
                                   is_training=is_training,
-                                  params=hparams)
+                                  params=hparams,
+                                  bidirectional=hparams.bidirectional,
+                                  use_transformer=False)
         frame_outputs = transformer_att.sparse_multihead_attention(
                                   queries=frame_query_enc,
                                   memories=frame_label_enc,
@@ -480,7 +505,9 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
                                   value_size=hparams.combined_lstm_units,
                                   output_size=hparams.combined_lstm_units,
                                   keep_prob=1-hparams.att_dropout,
-                                  scope='frame_attention')  
+                                  scope='frame_attention',
+                                  context=hparams.context,
+                                  attn_mode='diag_band')  
       else:
         frame_outputs = combined_probs
 
@@ -517,6 +544,45 @@ def get_model(transcription_data, hparams, is_training=True, is_real_time=False)
           weights=activation_loss_weights)
       tf.losses.add_loss(tf.reduce_mean(activation_losses))
       losses['activation'] = activation_losses
+
+###########################################################################################################################################
+###########################################################################################################################################
+    with tf.variable_scope('spec'):
+      fussion = tf.concat([onset_probs, offset_probs, frame_probs], axis=2)
+      
+      fuss_output = encoder_prepare(
+                                  fussion,
+                                  hparams.combined_lstm_units,
+                                  lengths=lengths,
+                                  is_training=is_training,
+                                  params=hparams,
+                                  bidirectional=hparams.bidirectional,
+                                  use_transformer=False)      
+      spec_bins = 229
+      spec_dynamic = slim.fully_connected(
+          fuss_output,
+          constants.MIDI_PITCHES * hparams.template_num,
+          activation_fn=tf.sigmoid,
+          scope='spec_dynamic')
+      
+      dims = tf.shape(spec_dynamic)
+      init_uniform = tf.random_uniform_initializer(minval=0, maxval=0.1, seed=None, dtype=tf.float32)
+      dynamic_weight = tf.reshape(spec_dynamic, (dims[0], dims[1], constants.MIDI_PITCHES, hparams.template_num, 1), 'dynamic_weight')
+      key_template = tf.get_variable('template', shape=[constants.MIDI_PITCHES, hparams.template_num, spec_bins], dtype=tf.float32, initializer=init_uniform)
+      spec_output = tf.multiply(dynamic_weight, key_template)
+      spec_output = tf.reduce_sum(spec_output, axis=3)
+      spec_output = tf.reduce_sum(spec_output, axis=2)
+      spec_output = tf.sigmoid(spec_output, name="spec_output")
+      
+      spec_out_flat = flatten_maybe_padded_sequences(spec_output, lengths)
+      # spec_out_flat is not used during inference.
+      if is_training:        
+        spec_labels_flat = flatten_maybe_padded_sequences(spec, lengths)
+        spec_labels_flat = tf.reshape(spec_out_flat, (-1, spec_bins))
+        spec_losses = tf_utils.log_loss(spec_labels_flat, spec_out_flat)
+        tf.losses.add_loss(tf.reduce_mean(spec_losses))
+        losses['spec'] = spec_losses
+
 
   predictions_flat = tf.cast(tf.greater_equal(frame_probs_flat, .5), tf.float32)
 
@@ -555,7 +621,7 @@ def get_default_hparams():
     hyperparameters for the model.
   """
   return tf.contrib.training.HParams(
-      batch_size=8,
+      batch_size=5,
       spec_fmin=30.0,
       spec_n_bins=229,
       spec_type='mel',
@@ -597,9 +663,16 @@ def get_default_hparams():
       use_lengths=False,
       use_cudnn=True,
       rnn_dropout_drop_amt=0.0,
-      bidirectional=True,
+      bidirectional=False,#True,
       onset_overlap=True,
       preprocess_examples=False,
-      num_heads=4,
+
+      use_transformer=False,#True,#
+      num_heads=4,#1,#8,#
       att_dropout=0.1,
+      use_ffn=False,
+      layer_preprocess="layer_norm",
+      layer_postprocess="layer_norm",
+      context=128,
+      template_num = 4
   )

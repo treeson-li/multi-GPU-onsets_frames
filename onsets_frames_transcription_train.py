@@ -35,10 +35,10 @@ tf.app.flags.DEFINE_integer("task_index", 0, "Index of task within the job")
 tf.app.flags.DEFINE_string('master', '',
                            'Name of the TensorFlow runtime to use.')
 tf.app.flags.DEFINE_string(
-    'examples_path', '/home/admin1/data/tfrecord/maps/maps_config2_train_spec.tfrecord',
+    'examples_path', '/home/liming/data/tfrecord/maps/maps_config2_train_spec.tfrecord',
     'Path to a TFRecord file of train/eval examples.')
 tf.app.flags.DEFINE_string(
-    'run_dir', '~/data/score_cxt128merged/',#'~/data/score_cxt128/',
+    'run_dir', '~/data/score_template4',#score_cxt128dir1',#score_cxt128label/',#'~/data/score_cxt128head1/',#'~/data/score_cxt128merged/',#'~/data/score_cxt128/',#
     'Path where checkpoints and summary events will be located during '
     'training and evaluation. Separate subdirectories `train` and `eval` '
     'will be created within this directory.')
@@ -50,7 +50,7 @@ tf.app.flags.DEFINE_string(
     'checkpoint_path', None,
     'Path to the checkpoint to use in `test` mode. If not provided, latest '
     'in `run_dir` will be used.')
-tf.app.flags.DEFINE_integer('num_steps', 1000000,
+tf.app.flags.DEFINE_integer('num_steps', 1400000,
                             'Number of training steps or `None` for infinite.')
 tf.app.flags.DEFINE_integer(
     'eval_num_batches', None,
